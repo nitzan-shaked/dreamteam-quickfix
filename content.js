@@ -140,7 +140,6 @@ async function setRowValues(row, start, end) {
 async function processRows(rowFunc) {
     const rows = document.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]');
     for (const row of rows) {
-
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
         if (!requiredDurationDiv) continue;
         const requiredDuration = parseDuration(requiredDurationDiv.innerText);
@@ -150,6 +149,24 @@ async function processRows(rowFunc) {
         const actualDuration = parseDuration(actualDurationDiv.innerText);
 
         await rowFunc(row, requiredDuration, actualDuration);
+    }
+}
+
+async function processTable(rowFunc) {
+    const table = document.querySelector('[class *= "table-component-styles__List-"]');
+    if (!table) {
+        console.warn("cannot find table list element");
+        return;
+    }
+    const clientHeight = table.clientHeight;
+
+    table.scrollTop = 0;
+    await waitForUi();
+    while (true) {
+        await processRows(rowFunc);
+        if (table.scrollTop + clientHeight >= table.scrollHeight) break;
+        table.scrollTop += clientHeight * 0.8;
+        await waitForUi();
     }
 }
 
@@ -180,7 +197,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (rowFunc) {
         (async () => {
-            await processRows(rowFunc);
+            await processTable(rowFunc);
             sendResponse({ status: "completed" });
             return true;
         })();
