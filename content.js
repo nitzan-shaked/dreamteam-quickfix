@@ -158,15 +158,17 @@ async function processTable(rowFunc) {
         console.warn("cannot find table list element");
         return;
     }
-    const clientHeight = table.clientHeight;
+    let currTop = 0;
 
-    table.scrollTop = 0;
-    await waitForUi();
     while (true) {
-        await processRows(rowFunc);
-        if (table.scrollTop + clientHeight >= table.scrollHeight) break;
-        table.scrollTop += clientHeight * 0.8;
+        table.scrollTop = currTop;
         await waitForUi();
+        let currBottom = currTop + table.clientHeight;
+
+        await processRows(rowFunc);
+
+        if (currBottom >= table.scrollHeight) break;
+        currTop = currBottom;
     }
 }
 
