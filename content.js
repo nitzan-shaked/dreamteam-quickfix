@@ -33,7 +33,7 @@ function cmpDuration(d1, d2) {
 
 //==============================================================
 //
-// UI MISC.
+// UI AUX.
 //
 //==============================================================
 
@@ -41,25 +41,20 @@ async function waitForUi() {
     return new Promise(resolve => setTimeout(resolve, 200));
 }
 
-async function clickAndWait(element) {
-    element.click();
-    await waitForUi();
-}
-
 //==============================================================
 //
-// SET SINGLE INPUT
+// SET ONE ROW
 //
 //==============================================================
 
-function findInput() {
-    return document.querySelector("input");
+function formatTime(time) {
+    return `${time.hours.toString().padStart(2, "0")}:${time.minutes.toString().padStart(2, "0")}`;
 }
 
-async function setInput(input, value) {
-    if (value === null)
-        value = "--:--";
-    input.value = value;
+async function setInput(input, valueStr) {
+    if (valueStr === null)
+        valueStr = "--:--";
+    input.value = valueStr;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", {
@@ -73,62 +68,77 @@ async function setInput(input, value) {
     await waitForUi();
 }
 
-async function findAndSetInput(value) {
-    const input = findInput();
+async function findAndSetInput(valueStr) {
+    const input = document.querySelector("input");
     if (!input) {
-        console.warn("cannot find input element for value", value);
-        return;
+        console.warn("cannot find input element for value", valueStr);
+        return false;
     }
-    await setInput(input, value);
+    await setInput(input, valueStr);
+    return true;
 }
 
-//==============================================================
-//
-// SET ONE ROW
-//
-//==============================================================
+async function clickClockCell(cell) {
+    const innerCell = cell.querySelector('[class *= "text-component-styles__Text-"]');
+    if (!innerCell) {
+        console.warn("cannot find inner cell to click", cell);
+        return false;
+    }
+    innerCell.click();
+    await waitForUi();
+    return true;
+}
 
-function formatTime(time) {
-    return `${time.hours.toString().padStart(2, "0")}:${time.minutes.toString().padStart(2, "0")}`;
+async function setClockCell(cell, value) {
+    if (!await clickClockCell(cell)) return false;
+    if (!await findAndSetInput(value ? formatTime(value) : null)) return false;
+    return true;
+}
+
+async function maybeExpandRow(row) {
+    if (row.children.length !== 1)
+        return row;
+    const firstChild = row.children[0];
+
+    if (firstChild.tagName !== "DIV")
+        return row;
+
+    const firstChildClass = firstChild.getAttribute("class") || "";
+    if (!firstChildClass.includes("expandable-table-row-component-styles__ExpandableTableRow-"))
+        return row;
+
+    const rowCells = row.querySelectorAll('[class *= "table-cell-component-styles__TableCell-"]');
+    if (rowCells.length === 0) {
+        console.warn("cannot expand row");
+        return null;
+    }
+
+    rowCells[0].click();
+    await waitForUi();
+
+    const leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
+    if (!leafRow)
+        console.warn("cannot find expansion row after expanding", row);
+
+    return leafRow;
 }
 
 async function setRowValues(row, start, end) {
-    const startTimeValue = start ? formatTime(start) : null;
-    const endTimeValue = end ? formatTime(end) : null;
-
-    // TRY "REGULAR" ROW FIRST
-
-    const rowClockCells = row.querySelectorAll('[class *= "ClockTime"] [class *= "TimePresentation"]');
-    if (rowClockCells.length !== 2) {
-        console.warn("cannot find clock cells in row", row);
-        return;
+    let leafRow = await maybeExpandRow(row);
+    if (!leafRow) {
+        console.warn("cannot find leaf row", row);
+        return false;
     }
 
-    await clickAndWait(rowClockCells[0]);
-    if (findInput()) {
-        findAndSetInput(startTimeValue);
-        await clickAndWait(rowClockCells[1]);
-        findAndSetInput(endTimeValue);
-        return;
+    const clockCells = leafRow.querySelectorAll("div.clock-in-and-out-item-clock");
+    if (clockCells.length !== 2) {
+        console.warn("cannot find clock cells in leaf row", leafRow);
+        return false;
     }
 
-    // ASSUME "EXPANSION" ROW
-
-    let expansionClockCells = document.querySelectorAll('[class *= "row-expansion-component-"] [class *= "ClockTime"] [class *= "TimePresentation"]');
-    if (expansionClockCells.length !== 2) {
-        console.warn("cannot find expansion row clock cells");
-        return;
-    }
-    await clickAndWait(expansionClockCells[0]);
-    await findAndSetInput(startTimeValue);
-
-    expansionClockCells = document.querySelectorAll('[class *= "row-expansion-component-"] [class *= "ClockTime"] [class *= "TimePresentation"]');
-    if (expansionClockCells.length !== 2) {
-        console.warn("cannot find 2nd clock cell in expansion row");
-        return;
-    }
-    await clickAndWait(expansionClockCells[1]);
-    await findAndSetInput(endTimeValue);
+    if (!await setClockCell(clockCells[0], start)) return false;
+    if (!await setClockCell(clockCells[1], end  )) return false;
+    return true;
 }
 
 //==============================================================
@@ -137,9 +147,13 @@ async function setRowValues(row, start, end) {
 //
 //==============================================================
 
-async function processRows(rowFunc) {
+async function processRows(rowFunc, seenRowIds) {
     const rows = document.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]');
     for (const row of rows) {
+        const rowId = row.getAttribute("data-rbd-draggable-id");
+        if (seenRowIds.has(rowId)) continue;
+        seenRowIds.add(rowId);
+
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
         if (!requiredDurationDiv) continue;
         const requiredDuration = parseDuration(requiredDurationDiv.innerText);
@@ -148,8 +162,10 @@ async function processRows(rowFunc) {
         if (!actualDurationDiv) continue;
         const actualDuration = parseDuration(actualDurationDiv.innerText);
 
-        await rowFunc(row, requiredDuration, actualDuration);
+        const keepGoing = await rowFunc(row, requiredDuration, actualDuration);
+        if (!keepGoing) return false;
     }
+    return true;
 }
 
 async function processTable(rowFunc) {
@@ -158,14 +174,16 @@ async function processTable(rowFunc) {
         console.warn("cannot find table list element");
         return;
     }
-    let currTop = 0;
 
+    let currTop = 0;
+    let seenRowIds = new Set();
     while (true) {
         table.scrollTop = currTop;
         await waitForUi();
         let currBottom = currTop + table.clientHeight;
 
-        await processRows(rowFunc);
+        const keepGoing = await processRows(rowFunc, seenRowIds);
+        if (!keepGoing) break;
 
         if (currBottom >= table.scrollHeight) break;
         currTop = currBottom;
@@ -179,15 +197,17 @@ async function processTable(rowFunc) {
 //==============================================================
 
 async function autoFillRow(row, requiredDuration, actualDuration) {
-    if (cmpDuration(actualDuration, requiredDuration) > -1) return;
+    if (cmpDuration(actualDuration, requiredDuration) > -1) return true;
     const start = { hours: 8, minutes: 0 };
     const end = addDuration(start, requiredDuration);
     await setRowValues(row, start, end);
+    return true;
 }
 
 async function clearRow(row, requiredDuration, actualDuration) {
     if (actualDuration.hours == 0 && actualDuration.minutes == 0) return;
     await setRowValues(row, null, null);
+    return true;
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -199,6 +219,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (rowFunc) {
         (async () => {
+            console.clear();
             await processTable(rowFunc);
             sendResponse({ status: "completed" });
             return true;
