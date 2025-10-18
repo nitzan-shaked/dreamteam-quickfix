@@ -1,15 +1,24 @@
-function sendMessage(msg) {
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    chrome.tabs.sendMessage(tab.id, { action: msg }, (response) => {
-      console.log(msg, "response:", response);
-    });
-  });
-}
+(function () {
 
-document.getElementById("autofill").addEventListener("click", () => {
-  sendMessage("autofill");
-});
+    function hookButton(buttonId, actionName, inProgressText) {
+        let button = document.getElementById(buttonId);
 
-document.getElementById("clear").addEventListener("click", () => {
-  sendMessage("clear");
-});
+        button.addEventListener("click", () => {
+            const origText = button.textContent;
+            button.textContent = inProgressText;
+            button.classList.add("disabled");
+
+            chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+                chrome.tabs.sendMessage(tab.id, { action: actionName }, (response) => {
+                    console.log(`${actionName} response:`, response);
+                    button.classList.remove("disabled");
+                    button.textContent = origText;
+                });
+            });
+        });
+    }
+
+    hookButton("autofill", "autofill", "Filling...");
+    hookButton("clear", "clear", "Clearing...");
+
+})();

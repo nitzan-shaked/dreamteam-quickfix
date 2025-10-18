@@ -39,7 +39,7 @@ function cmpDuration(d1, d2) {
 //==============================================================
 
 async function waitForUi() {
-    return new Promise(resolve => setTimeout(resolve, 200));
+    return new Promise(resolve => setTimeout(resolve, 50));
 }
 
 //==============================================================
@@ -228,15 +228,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         null
     );
 
-    if (rowFunc) {
-        (async () => {
-            console.clear();
-            await processTable(rowFunc);
-            sendResponse({ status: "completed" });
-            return true;
-        })();
-    } else {
-        console.warn("Unknown action:", request.action);
+    if (!rowFunc) {
         sendResponse({ status: "error", message: "Unknown action" });
+        return false; // Synchronous response, no need to keep channel open
     }
+
+    (async () => {
+        await processTable(rowFunc);
+        sendResponse({ status: "completed" });
+    })();
+    return true; // Keep the message channel open for async response
 });
