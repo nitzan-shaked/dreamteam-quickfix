@@ -6,7 +6,8 @@
 
 function parseDuration(durationText) {
     const match = durationText.replace(/[\s]/g, "").match(/(\d+)h(\d+)m/);
-    if (!match) return null;
+    if (!match)
+        return null;
     const hours = parseInt(match[1], 10);
     const minutes = parseInt(match[2], 10);
     return { hours, minutes };
@@ -90,9 +91,11 @@ async function clickClockCell(cell) {
 }
 
 async function setClockCell(cell, value) {
-    if (!await clickClockCell(cell)) return false;
-    if (!await findAndSetInput(value ? formatTime(value) : null)) return false;
-    return true;
+    return (
+        true
+        && clickClockCell(cell)
+        && findAndSetInput(value ? formatTime(value) : null)
+    );
 }
 
 async function maybeExpandRow(row) {
@@ -136,9 +139,11 @@ async function setRowValues(row, start, end) {
         return false;
     }
 
-    if (!await setClockCell(clockCells[0], start)) return false;
-    if (!await setClockCell(clockCells[1], end  )) return false;
-    return true;
+    return (
+        true
+        && await setClockCell(clockCells[0], start)
+        && await setClockCell(clockCells[1], end  )
+    );
 }
 
 //==============================================================
@@ -151,19 +156,23 @@ async function processRows(rowFunc, seenRowIds) {
     const rows = document.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]');
     for (const row of rows) {
         const rowId = row.getAttribute("data-rbd-draggable-id");
-        if (seenRowIds.has(rowId)) continue;
+        if (seenRowIds.has(rowId))
+            continue;
         seenRowIds.add(rowId);
 
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
-        if (!requiredDurationDiv) continue;
+        if (!requiredDurationDiv)
+            continue;
         const requiredDuration = parseDuration(requiredDurationDiv.innerText);
 
         const actualDurationDiv = row.querySelector('[class *= "timer-difference-presentation-component-styles__Duration-"]');
-        if (!actualDurationDiv) continue;
+        if (!actualDurationDiv)
+            continue;
         const actualDuration = parseDuration(actualDurationDiv.innerText);
 
         const keepGoing = await rowFunc(row, requiredDuration, actualDuration);
-        if (!keepGoing) return false;
+        if (!keepGoing)
+            return false;
     }
     return true;
 }
@@ -171,7 +180,7 @@ async function processRows(rowFunc, seenRowIds) {
 async function processTable(rowFunc) {
     const table = document.querySelector('[class *= "table-component-styles__List-"]');
     if (!table) {
-        console.warn("cannot find table list element");
+        console.warn("cannot find table");
         return;
     }
 
@@ -183,9 +192,11 @@ async function processTable(rowFunc) {
         let currBottom = currTop + table.clientHeight;
 
         const keepGoing = await processRows(rowFunc, seenRowIds);
-        if (!keepGoing) break;
+        if (!keepGoing)
+            break;
 
-        if (currBottom >= table.scrollHeight) break;
+        if (currBottom >= table.scrollHeight)
+            break;
         currTop = currBottom;
     }
 }
@@ -197,17 +208,17 @@ async function processTable(rowFunc) {
 //==============================================================
 
 async function autoFillRow(row, requiredDuration, actualDuration) {
-    if (cmpDuration(actualDuration, requiredDuration) > -1) return true;
+    if (cmpDuration(actualDuration, requiredDuration) > -1)
+        return true;
     const start = { hours: 8, minutes: 0 };
     const end = addDuration(start, requiredDuration);
-    await setRowValues(row, start, end);
-    return true;
+    return await setRowValues(row, start, end);
 }
 
 async function clearRow(row, requiredDuration, actualDuration) {
-    if (actualDuration.hours == 0 && actualDuration.minutes == 0) return;
-    await setRowValues(row, null, null);
-    return true;
+    if (actualDuration.hours == 0 && actualDuration.minutes == 0)
+        return true;
+    return await setRowValues(row, null, null);
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
