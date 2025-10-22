@@ -1,35 +1,78 @@
 //==============================================================
 //
-// DURATION
+// DATE
 //
 //==============================================================
 
-function parseDuration(durationText) {
-    const match = durationText.replace(/[\s]/g, "").match(/(\d+)h(\d+)m/);
-    if (!match)
-        return null;
-    const hours = parseInt(match[1], 10);
-    const minutes = parseInt(match[2], 10);
-    return { hours, minutes };
+function parseMonthDay(dateStr) {
+    // Example input: "Wed, Oct 18th" or "Mon, Feb 21st"
+
+    // remove day-of-week prefix and ordinal suffixes
+    const cleaned = dateStr
+        .replace(/^[A-Za-z]+,\s*/, "") // remove leading day of week, comma and spaces
+        .replace(/(st|nd|rd|th)\s*/, ""); // remove trailing ordinal suffix
+
+    // now cleaned might be "Oct 18"
+    const [monthStr, dayStr] = cleaned.split(" ");
+    const month = new Date(`${monthStr} 1, 2000`).getMonth(); // extract month index (0-11)
+    const day = parseInt(dayStr, 10);
+    const year = new Date().getFullYear();
+    return new Date(year, month, day);
 }
 
-function addDuration(start, duration) {
-    const startMinutes = start.hours * 60 + start.minutes;
-    const endMinutes = startMinutes + duration.hours * 60 + duration.minutes;
-    return {
-        hours: Math.floor(endMinutes / 60),
-        minutes: endMinutes % 60,
-    };
-}
+//==============================================================
+//
+// CLOCK-TIME
+//
+//==============================================================
 
-function cmpDuration(d1, d2) {
-    if (d1.hours < d2.hours) return -1;
-    if (d1.hours > d2.hours) return +1;
+class ClockTime {
+    constructor(hours, minutes) {
+        if (typeof hours !== "number" || typeof minutes !== "number")
+            throw new Error("Hours and minutes must be numbers");
+        if (hours < 0 || minutes < 0)
+            throw new Error("Hours and minutes must be non-negative");
+        if (minutes >= 60)
+            throw new Error("Minutes must be less than 60");
+        this.hours = hours;
+        this.minutes = minutes;
+    }
 
-    if (d1.minutes < d2.minutes) return -1;
-    if (d1.minutes > d2.minutes) return +1;
+    toMinutes() {
+        return this.hours * 60 + this.minutes;
+    }
 
-    return 0;
+    static fromMinutes(totalMinutes) {
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        return new ClockTime(hours, minutes);
+    }
+
+    valueOf() {
+        return this.toMinutes();
+    }
+
+    [Symbol.toPrimitive](hint) {
+        return this.toMinutes();
+    }
+
+    add(other) {
+        return ClockTime.fromMinutes(this.toMinutes() + other.toMinutes());
+    }
+
+    toString() {
+        const hoursStr = this.hours.toString().padStart(2, "0");
+        const minutesStr = this.minutes.toString().padStart(2, "0");
+        return `${hoursStr}:${minutesStr}`;
+    }
+
+    static fromString(s) {
+        const match = s.replace(/[\s]/g, "").match(/(\d+)h(\d+)m/);
+        if (!match) return null;
+        const hours = parseInt(match[1], 10);
+        const minutes = parseInt(match[2], 10);
+        return new ClockTime(hours, minutes);
+    }
 }
 
 //==============================================================
@@ -39,22 +82,60 @@ function cmpDuration(d1, d2) {
 //==============================================================
 
 async function waitForUi() {
-    return new Promise(resolve => setTimeout(resolve, 50));
+    return new Promise(resolve => setTimeout(resolve, 100));
 }
 
 //==============================================================
 //
-// SET ONE ROW
+// ONE ROW LOGIC
 //
 //==============================================================
 
-function formatTime(time) {
-    return `${time.hours.toString().padStart(2, "0")}:${time.minutes.toString().padStart(2, "0")}`;
+class RowData {
+    constructor(rowId, rowDate, requiredDuration, actualDuration) {
+        this.rowId = rowId;
+        this.rowDate = rowDate;
+        this.requiredDuration = requiredDuration;
+        this.actualDuration = actualDuration;
+    }
+
+    toString() {
+        return `id=${this.rowId}, date=${this.rowDate.toDateString()}, required=${this.requiredDuration.toString()}, actual=${this.actualDuration.toString()})`;
+    }
+
+    static fromRow(row) {
+        const rowIdStr = row.getAttribute("data-rbd-draggable-id");
+        if (!rowIdStr)
+            throw new Error("rowIdStr not found in row");
+        const rowIdStrMatch = rowIdStr.match(/^table-row-(\d+)$/);
+        if (!rowIdStrMatch)
+            throw new Error("Invalid rowIdStr format: " + rowIdStr);
+        const rowId = parseInt(rowIdStrMatch[1], 10);
+
+        const dateDiv = row.querySelector('[class *= "employee-attendance-summary-date-component-styles__Date-"]');
+        if (!dateDiv)
+            throw new Error("Date div not found in row: " + rowId);
+        const rowDate = parseMonthDay(dateDiv.innerText);
+
+        const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
+        const requiredDuration = requiredDurationDiv ?
+            ClockTime.fromString(requiredDurationDiv.innerText) :
+            ClockTime.fromMinutes(0);
+
+        const actualDurationDiv = row.querySelector('[class *= "timer-difference-presentation-component-styles__Duration-"]');
+        const actualDuration = actualDurationDiv ?
+            ClockTime.fromString(actualDurationDiv.innerText) :
+            ClockTime.fromMinutes(0);
+
+        return new RowData(rowId, rowDate, requiredDuration, actualDuration);
+    }
 }
 
 async function setInput(input, valueStr) {
     if (valueStr === null)
         valueStr = "--:--";
+    if (input.value === valueStr)
+        return;
     input.value = valueStr;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -69,81 +150,100 @@ async function setInput(input, valueStr) {
     await waitForUi();
 }
 
-async function findAndSetInput(valueStr) {
-    const input = document.querySelector("input");
-    if (!input) {
-        console.warn("cannot find input element for value", valueStr);
-        return false;
-    }
-    await setInput(input, valueStr);
-    return true;
-}
-
-async function clickClockCell(cell) {
+async function setClockCell(cell, clockTime) {
     const innerCell = cell.querySelector('[class *= "text-component-styles__Text-"]');
     if (!innerCell) {
-        console.warn("cannot find inner cell to click", cell);
+        console.warn(`clickClockCell: cannot find inner cell for ${cell}`);
         return false;
     }
+
+    const clockTimeStr = clockTime ? clockTime.toString() : "--:--";
+    if (innerCell.innerText === clockTimeStr)
+        return true;
+
     innerCell.click();
     await waitForUi();
+
+    const inputs = document.querySelectorAll("input");
+    if (inputs.length !== 1) {
+        console.warn(`cannot find input element ${inputs.length} for value ${valueStr}`);
+        return false;
+    }
+    await setInput(inputs[0], clockTimeStr);
+
     return true;
 }
 
-async function setClockCell(cell, value) {
-    return (
-        true
-        && clickClockCell(cell)
-        && findAndSetInput(value ? formatTime(value) : null)
-    );
-}
-
-async function maybeExpandRow(row) {
+function isExpandableRow(row) {
     if (row.children.length !== 1)
-        return row;
+        return false;
     const firstChild = row.children[0];
 
     if (firstChild.tagName !== "DIV")
-        return row;
+        return false;
 
     const firstChildClass = firstChild.getAttribute("class") || "";
     if (!firstChildClass.includes("expandable-table-row-component-styles__ExpandableTableRow-"))
-        return row;
+        return false;
+
+    return true;
+}
+
+async function expandRow(row) {
+    const rowData = RowData.fromRow(row);
+
+    if (!isExpandableRow(row)) {
+        console.warn(`non expandable row ${rowData}`);
+        return null;
+    }
+
+    // already expanded?
+    let leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
+    if (leafRow) {
+        console.log(`already expanded row ${rowData}`);
+        return leafRow;
+    }
 
     const rowCells = row.querySelectorAll('[class *= "table-cell-component-styles__TableCell-"]');
     if (rowCells.length === 0) {
-        console.warn("cannot expand row");
+        console.warn(`cannot expand row ${rowData}`);
         return null;
     }
 
     rowCells[0].click();
     await waitForUi();
 
-    const leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
+    leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
     if (!leafRow)
-        console.warn("cannot find expansion row after expanding", row);
+        console.warn(`cannot find expansion for row ${rowData}`);
 
     return leafRow;
 }
 
-async function setRowValues(row, start, end) {
-    let leafRow = await maybeExpandRow(row);
-    if (!leafRow) {
-        console.warn("cannot find leaf row", row);
-        return false;
-    }
-
-    const clockCells = leafRow.querySelectorAll("div.clock-in-and-out-item-clock");
-    if (clockCells.length !== 2) {
-        console.warn("cannot find clock cells in leaf row", leafRow);
-        return false;
-    }
-
-    return (
-        true
-        && await setClockCell(clockCells[0], start)
-        && await setClockCell(clockCells[1], end  )
+async function setRowStartEndTimes(row, startTime, endTime) {
+    const rowData = RowData.fromRow(row);
+    console.log(
+        `setting row ${rowData} to`,
+        startTime ? startTime.toString() : "null",
+        "-",
+        endTime ? endTime.toString() : "null"
     );
+
+    let leafRow = await expandRow(row);
+    if (!leafRow)
+        return false;
+
+    let clockCells = Array.from(leafRow.querySelectorAll("div.clock-in-and-out-item-clock"));
+    if (clockCells.length < 2) {
+        console.warn(`cannot find clock cells (${clockCells.length}) in leaf row for row ${rowData}`);
+        return false;
+    }
+    while (clockCells.length > 2)
+        await setClockCell(clockCells.shift(), null);
+    await setClockCell(clockCells[0], startTime);
+    await setClockCell(clockCells[1], endTime);
+
+    return true;
 }
 
 //==============================================================
@@ -152,25 +252,22 @@ async function setRowValues(row, start, end) {
 //
 //==============================================================
 
-async function processRows(rowFunc, seenRowIds) {
-    const rows = document.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]');
+async function processRows(table, rowFunc, seenRowIds) {
+    const rawRows = table.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]')
+    const rows = Array.from(rawRows)
+        .filter(isExpandableRow)
+        .sort((a, b) => RowData.fromRow(a).rowId - RowData.fromRow(b).rowId);
+
     for (const row of rows) {
-        const rowId = row.getAttribute("data-rbd-draggable-id");
-        if (seenRowIds.has(rowId))
+        const rowData = RowData.fromRow(row);
+        if (seenRowIds.has(rowData.rowId))
             continue;
-        seenRowIds.add(rowId);
+        seenRowIds.add(rowData.rowId);
 
-        const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
-        if (!requiredDurationDiv)
-            continue;
-        const requiredDuration = parseDuration(requiredDurationDiv.innerText);
+        table.scrollTop = Math.max(row.offsetTop - 100, 0);
+        await waitForUi();
 
-        const actualDurationDiv = row.querySelector('[class *= "timer-difference-presentation-component-styles__Duration-"]');
-        if (!actualDurationDiv)
-            continue;
-        const actualDuration = parseDuration(actualDurationDiv.innerText);
-
-        const keepGoing = await rowFunc(row, requiredDuration, actualDuration);
+        const keepGoing = await rowFunc(row);
         if (!keepGoing)
             return false;
     }
@@ -191,7 +288,7 @@ async function processTable(rowFunc) {
         await waitForUi();
         let currBottom = currTop + table.clientHeight;
 
-        const keepGoing = await processRows(rowFunc, seenRowIds);
+        const keepGoing = await processRows(table, rowFunc, seenRowIds);
         if (!keepGoing)
             break;
 
@@ -203,39 +300,144 @@ async function processTable(rowFunc) {
 
 //==============================================================
 //
+// CLEAR
+//
+//==============================================================
+
+async function clearRow(row) {
+    const rowData = RowData.fromRow(row);
+    if (rowData.requiredDuration == 0)
+        return true;
+    if (rowData.actualDuration == 0)
+        return true;
+    return await setRowStartEndTimes(row, null, null);
+}
+
+async function clearTimesheet() {
+    await processTable(clearRow);
+}
+
+//==============================================================
+//
+// AUTO-FILL
+//
+//==============================================================
+
+let requiredMinutes = [];
+let actualMinutes = [];
+
+function needToAdjust(rowData) {
+    return rowData.rowDate < new Date() && rowData.actualDuration < rowData.requiredDuration;
+}
+
+async function collectRequiredDuration(row) {
+    const rowData = RowData.fromRow(row);
+    if (needToAdjust(rowData))
+        requiredMinutes.push(rowData.requiredDuration.toMinutes());
+    return true;
+}
+
+function randomInt(min, max) {
+    return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function randomizeActualDurations(tolerance) {
+
+    actualMinutes = requiredMinutes.map(required => randomInt(
+        Math.max(0, required - tolerance),
+        required + tolerance
+    ));
+
+    const sumRequired = requiredMinutes.reduce((a, b) => a + b, 0);
+    const sumActuals = actualMinutes.reduce((a, b) => a + b, 0);
+
+    let diff = sumActuals - sumRequired;
+    while (diff !== 0) {
+        const i = randomInt(0, requiredMinutes.length - 1);
+        const base = requiredMinutes[i];
+        const curr = actualMinutes[i];
+
+        let adjustment = 0;
+
+        if (diff > 0 && curr > 0) {
+            adjustment = -1;
+        } else if (diff < 0 && curr < base + tolerance) {
+            adjustment = 1;
+        }
+
+        actualMinutes[i] += adjustment;
+        diff += adjustment;
+    }
+}
+
+async function autoFillRow(row) {
+    const rowData = RowData.fromRow(row);
+    if (!needToAdjust(rowData))
+        return true;
+
+    if (requiredMinutes.length === 0) {
+        console.warn(`no required minutes left for row ${rowData}`);
+        return true;
+    }
+    if (actualMinutes.length === 0) {
+        console.warn(`no actual minutes left for row ${rowData}`);
+        return true;
+    }
+    const reqMins = requiredMinutes.shift();
+    const actMins = actualMinutes.shift();
+    if (reqMins !== rowData.requiredDuration.toMinutes()) {
+        console.warn(`mismatched required minutes for row ${rowData}`);
+        return true;
+    }
+
+    const nominalStartTime = new ClockTime(8, 0);
+    const deltaStartTimeMinutes = randomInt(-15, 15);
+    const startTime = ClockTime.fromMinutes(
+        nominalStartTime.toMinutes() + deltaStartTimeMinutes
+    );
+
+    const newActualDuration = ClockTime.fromMinutes(actMins);
+    const endTime = startTime.add(newActualDuration);
+
+    return await setRowStartEndTimes(row, startTime, endTime);
+}
+
+async function autoFillTimesheet() {
+    requiredMinutes = [];
+    await processTable(collectRequiredDuration);
+    randomizeActualDurations(15);
+    await processTable(autoFillRow);
+}
+
+//==============================================================
+//
 // MAIN
 //
 //==============================================================
 
-async function autoFillRow(row, requiredDuration, actualDuration) {
-    if (cmpDuration(actualDuration, requiredDuration) > -1)
-        return true;
-    const start = { hours: 8, minutes: 0 };
-    const end = addDuration(start, requiredDuration);
-    return await setRowValues(row, start, end);
-}
-
-async function clearRow(row, requiredDuration, actualDuration) {
-    if (actualDuration.hours == 0 && actualDuration.minutes == 0)
-        return true;
-    return await setRowValues(row, null, null);
-}
-
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    rowFunc = (
-        request.action === "autofill" ? autoFillRow :
-        request.action === "clear" ? clearRow :
-        null
-    );
-
-    if (!rowFunc) {
-        sendResponse({ status: "error", message: "Unknown action" });
-        return false; // Synchronous response, no need to keep channel open
+    if (request.action == "clear") {
+        (async () => {
+            console.clear();
+            console.log("*** starting clear action");
+            await clearTimesheet();
+            sendResponse({ status: "completed" });
+            console.log("*** completed clear action");
+        })();
+        return true; // Keep the message channel open for async response
     }
 
-    (async () => {
-        await processTable(rowFunc);
-        sendResponse({ status: "completed" });
-    })();
-    return true; // Keep the message channel open for async response
+    if (request.action == "autofill") {
+        (async () => {
+            console.clear();
+            console.log("*** starting autofill action");
+            await autoFillTimesheet();
+            sendResponse({ status: "completed" });
+            console.log("*** completed autofill action");
+        })();
+        return true; // Keep the message channel open for async response
+    }
+
+    sendResponse({ status: "error", message: "Unknown action" });
+    return false; // Synchronous response, no need to keep channel open
 });
