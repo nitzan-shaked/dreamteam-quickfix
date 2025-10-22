@@ -70,7 +70,8 @@ class ClockTime {
 
     static fromString(s) {
         const match = s.replace(/[\s]/g, "").match(/(\d+)h(\d+)m/);
-        if (!match) return null;
+        if (!match)
+            throw new Error("Invalid ClockTime string: " + s);
         const hours = parseInt(match[1], 10);
         const minutes = parseInt(match[2], 10);
         return new ClockTime(hours, minutes);
@@ -142,8 +143,6 @@ class RowData {
 }
 
 async function setInput(input, valueStr) {
-    if (valueStr === null)
-        valueStr = "--:--";
     if (input.value === valueStr)
         return;
     input.value = valueStr;
@@ -162,26 +161,20 @@ async function setInput(input, valueStr) {
 
 async function setClockCell(cell, clockTime) {
     const innerCell = cell.querySelector('[class *= "text-component-styles__Text-"]');
-    if (!innerCell) {
-        console.warn(`clickClockCell: cannot find inner cell for ${cell}`);
-        return false;
-    }
+    if (!innerCell)
+        throw new Error(`clickClockCell: cannot find inner cell for ${cell}`);
 
     const clockTimeStr = clockTime ? clockTime.toString() : "--:--";
     if (innerCell.innerText === clockTimeStr)
-        return true;
+        return;
 
     innerCell.click();
     await waitForUi();
 
     const inputs = document.querySelectorAll("input");
-    if (inputs.length !== 1) {
-        console.warn(`cannot find input element ${inputs.length} for value ${valueStr}`);
-        return false;
-    }
+    if (inputs.length !== 1)
+        throw new Error(`cannot find input element ${inputs.length} for value ${valueStr}`);
     await setInput(inputs[0], clockTimeStr);
-
-    return true;
 }
 
 function isExpandableRow(row) {
@@ -213,17 +206,15 @@ async function expandRow(rowData) {
     }
 
     const rowCells = row.querySelectorAll('[class *= "table-cell-component-styles__TableCell-"]');
-    if (rowCells.length === 0) {
-        console.warn(`cannot expand row ${rowData}`);
-        return null;
-    }
+    if (rowCells.length === 0)
+        throw new Error(`cannot expand row ${rowData}`);
 
     rowCells[0].click();
     await waitForUi();
 
     leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
     if (!leafRow)
-        console.warn(`cannot find expansion for row ${rowData}`);
+        throw new Error(`cannot find expansion for row ${rowData}`);
 
     return leafRow;
 }
@@ -236,31 +227,23 @@ async function setRowStartEndTimes(rowData, startTime, endTime) {
         endTime ? endTime.toString() : "null"
     );
 
-    let leafRow = await expandRow(rowData);
-    if (!leafRow)
-        return false;
+    const leafRow = await expandRow(rowData);
 
     let clockCells = [];
     const multiInOut = leafRow.querySelectorAll('[class *= "multiple-clock-in-and-out-component-styles__ClockInAndOutItems-"]');
-    if (multiInOut.length != 1) {
-        console.warn(`cannot find multiple clock-in-and-out component in leaf row for row ${rowData}`);
-        return false;
-    }
+    if (multiInOut.length != 1)
+        throw new Error(`cannot find multiple clock-in-and-out component in leaf row for row ${rowData}`);
     for (const item of multiInOut[0].children) {
         const itemClockCells = item.querySelectorAll("div.clock-in-and-out-item-clock");
         clockCells.push(...itemClockCells);
     }
-    if (clockCells.length < 2) {
-        console.warn(`cannot find clock cells (${clockCells.length}) in leaf row for row ${rowData}`);
-        return false;
-    }
+    if (clockCells.length < 2)
+        throw new Error(`cannot find clock cells (${clockCells.length}) in leaf row for row ${rowData}`);
 
     await setClockCell(clockCells.shift(), startTime);
     await setClockCell(clockCells.shift(), endTime);
     while (clockCells.length)
         await setClockCell(clockCells.shift(), null);
-
-    return true;
 }
 
 //==============================================================
@@ -286,10 +269,7 @@ async function processRows(table, rowFunc, seenRowIds) {
 
         table.scrollTop = Math.max(rowData.getRow().offsetTop - 100, 0);
         await waitForUi();
-
-        const keepGoing = await rowFunc(rowData);
-        if (!keepGoing)
-            return false;
+        await rowFunc(rowData);
     }
 
     return didSomething;
@@ -319,7 +299,7 @@ async function processTable(rowFunc) {
 //==============================================================
 
 async function clearRow(rowData) {
-    return await setRowStartEndTimes(rowData, null, null);
+    await setRowStartEndTimes(rowData, null, null);
 }
 
 async function clearTimesheet() {
@@ -346,9 +326,9 @@ function needToAdjust(rowData) {
 }
 
 async function collectRequiredDuration(rowData) {
-    if (needToAdjust(rowData))
-        requiredMinutes.push(rowData.requiredDuration.toMinutes());
-    return true;
+    if (!needToAdjust(rowData))
+        return;
+    requiredMinutes.push(rowData.requiredDuration.toMinutes());
 }
 
 function randomInt(min, max) {
@@ -386,22 +366,16 @@ function randomizeActualDurations(tolerance) {
 
 async function autoFillRow(rowData) {
     if (!needToAdjust(rowData))
-        return true;
+        return;
 
-    if (requiredMinutes.length === 0) {
-        console.warn(`no required minutes left for row ${rowData}`);
-        return true;
-    }
-    if (actualMinutes.length === 0) {
-        console.warn(`no actual minutes left for row ${rowData}`);
-        return true;
-    }
+    if (requiredMinutes.length === 0)
+        throw new Error(`no required minutes left for row ${rowData}`);
+    if (actualMinutes.length === 0)
+        throw new Error(`no actual minutes left for row ${rowData}`);
     const reqMins = requiredMinutes.shift();
     const actMins = actualMinutes.shift();
-    if (reqMins !== rowData.requiredDuration.toMinutes()) {
-        console.warn(`mismatched required minutes for row ${rowData}`);
-        return true;
-    }
+    if (reqMins !== rowData.requiredDuration.toMinutes())
+        throw new Error(`mismatched required minutes for row ${rowData}`);
 
     const nominalStartTime = new ClockTime(8, 0);
     const deltaStartTimeMinutes = randomInt(-15, 15);
@@ -412,7 +386,7 @@ async function autoFillRow(rowData) {
     const newActualDuration = ClockTime.fromMinutes(actMins);
     const endTime = startTime.add(newActualDuration);
 
-    return await setRowStartEndTimes(rowData, startTime, endTime);
+    await setRowStartEndTimes(rowData, startTime, endTime);
 }
 
 async function autoFillTimesheet() {
