@@ -297,25 +297,18 @@ async function processRows(table, rowFunc, seenRowIds) {
 
 async function processTable(rowFunc) {
     const table = document.querySelector('[class *= "table-component-styles__List-"]');
-    if (!table) {
-        console.warn("cannot find table");
-        return;
-    }
+    if (!table)
+        throw new Error("Cannot find timesheet table");
 
-    let currTop = 0;
     let seenRowIds = new Set();
-    while (true) {
-        table.scrollTop = currTop;
-        await waitForUi();
-        let currBottom = currTop + table.clientHeight;
 
+    table.scrollTop = 0;
+    await waitForUi();
+
+    while (true) {
         const keepGoing = await processRows(table, rowFunc, seenRowIds);
         if (!keepGoing)
             break;
-
-        if (currBottom >= table.scrollHeight)
-            break;
-        currTop = currBottom;
     }
 }
 
