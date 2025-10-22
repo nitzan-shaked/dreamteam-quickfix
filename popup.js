@@ -13,8 +13,10 @@
                     console.log(`${actionName} response:`, response);
                     button.classList.remove("disabled");
                     button.textContent = origText;
+                    window.close();
                 });
             });
+
         });
     }
 

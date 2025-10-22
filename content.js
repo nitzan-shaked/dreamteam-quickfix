@@ -6,10 +6,25 @@ const UI_WAIT_MS = 10;
 //
 //==============================================================
 
-let minTimesheetMonth = null;
-let minTimesheetYear = null;
-let maxTimesheetMonth = null;
-let maxTimesheetYear = null;
+let minTimesheetDate = null;
+let maxTimesheetDate = null;
+
+class MonthDay {
+    constructor(month, day) {
+        this.month = month;
+        this.day = day;
+    }
+
+    toString() {
+        const monthStr = (this.month + 1).toString().padStart(2, "0");
+        const dayStr = this.day.toString().padStart(2, "0");
+        return `${monthStr}${dayStr}`;
+    }
+
+    valueOf() {
+        return this.toString();
+    }
+}
 
 function parseMonthDayStr(s) {
     // Example input: "Oct 18th" or "Feb 21st"
@@ -17,15 +32,15 @@ function parseMonthDayStr(s) {
     const [monthStr, dayStr] = cleaned.split(" ").map(s => s.trim());
     const month = new Date(`${monthStr} 1, 2000`).getMonth(); // extract month index (0-11)
     const day = parseInt(dayStr, 10);
-    return [month, day];
+    return new MonthDay(month, day);
 }
 
 function parseMonthDayYearStr(dateStr) {
     // Example input: "Oct 18th, 2024"
     const [monthDayStr, yearStr] = dateStr.split(",").map(s => s.trim());
-    const [month, day] = parseMonthDayStr(monthDayStr);
+    const monthDay = parseMonthDayStr(monthDayStr);
     const year = parseInt(yearStr, 10);
-    return [month, day, year];
+    return new Date(year, monthDay.month, monthDay.day);
 }
 
 function parseWeekdayMonthDayStr(dateStr) {
@@ -45,15 +60,20 @@ function extractTimesheetPeriod() {
     const periodTextStr = periodTextDiv.innerText;
 
     const [startDateStr, endDateStr] = periodTextStr.split(" - ").map(s => s.trim());
-    const [startMonth, startDay, startYear] = parseMonthDayYearStr(startDateStr);
-    const [endMonth, endDay, endYear] = parseMonthDayYearStr(endDateStr);
+    minTimesheetDate = parseMonthDayYearStr(startDateStr);
+    maxTimesheetDate = parseMonthDayYearStr(endDateStr);
 
-    minTimesheetMonth = startMonth;
-    minTimesheetYear = startYear;
-    maxTimesheetMonth = endMonth;
-    maxTimesheetYear = endYear;
+    if (minTimesheetDate > maxTimesheetDate)
+        throw new Error(`Invalid timesheet period: ${periodTextStr}`);
+    if (maxTimesheetDate.getFullYear() - minTimesheetDate.getFullYear() > 1)
+        throw new Error(`Invalid timesheet period (too long): ${periodTextStr}`);
 
-    console.log(`Timesheet period: ${minTimesheetMonth + 1}/${minTimesheetYear} - ${maxTimesheetMonth + 1}/${maxTimesheetYear}`);
+    console.log(
+        "Timesheet period:",
+        minTimesheetDate.toDateString(),
+        "-",
+        maxTimesheetDate.toDateString()
+    );
 }
 
 //==============================================================
@@ -160,12 +180,22 @@ class RowData {
         const rowDateDiv = row.querySelector('[class *= "employee-attendance-summary-date-component-styles__Date-"]');
         if (!rowDateDiv)
             throw new Error("Date div not found in row: " + rowId);
-        const [rowMonth, rowDay] = parseWeekdayMonthDayStr(rowDateDiv.innerText);
-        let rowYear = minTimesheetYear;
-        if (minTimesheetMonth > maxTimesheetMonth && rowMonth < minTimesheetMonth) {
-            rowYear = maxTimesheetYear;
+        const rowMonthDay = parseWeekdayMonthDayStr(rowDateDiv.innerText);
+
+        let rowDate = new Date(
+            minTimesheetDate.getFullYear(),
+            rowMonthDay.month,
+            rowMonthDay.day
+        );
+        if (rowDate < minTimesheetDate) {
+            rowDate = new Date(
+                maxTimesheetDate.getFullYear(),
+                rowMonthDay.month,
+                rowMonthDay.day
+            );
         }
-        const rowDate = new Date(rowYear, rowMonth, rowDay);
+        if (rowDate < minTimesheetDate || rowDate > maxTimesheetDate)
+            throw new Error(`Row date ${rowDate.toDateString()} out of timesheet range ${minTimesheetDate.toDateString()} - ${maxTimesheetDate.toDateString()}`);
 
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
         const requiredDuration = requiredDurationDiv ?
