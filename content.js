@@ -6,20 +6,54 @@ const UI_WAIT_MS = 10;
 //
 //==============================================================
 
-function parseMonthDay(dateStr) {
-    // Example input: "Wed, Oct 18th" or "Mon, Feb 21st"
+let minTimesheetMonth = null;
+let minTimesheetYear = null;
+let maxTimesheetMonth = null;
+let maxTimesheetYear = null;
 
-    // remove day-of-week prefix and ordinal suffixes
-    const cleaned = dateStr
-        .replace(/^[A-Za-z]+,\s*/, "") // remove leading day of week, comma and spaces
-        .replace(/(st|nd|rd|th)\s*/, ""); // remove trailing ordinal suffix
-
-    // now cleaned might be "Oct 18"
-    const [monthStr, dayStr] = cleaned.split(" ");
+function parseMonthDayStr(s) {
+    // Example input: "Oct 18th" or "Feb 21st"
+    const cleaned = s.replace(/(st|nd|rd|th)\s*/, "");
+    const [monthStr, dayStr] = cleaned.split(" ").map(s => s.trim());
     const month = new Date(`${monthStr} 1, 2000`).getMonth(); // extract month index (0-11)
     const day = parseInt(dayStr, 10);
-    const year = new Date().getFullYear();
-    return new Date(year, month, day);
+    return [month, day];
+}
+
+function parseMonthDayYearStr(dateStr) {
+    // Example input: "Oct 18th, 2024"
+    const [monthDayStr, yearStr] = dateStr.split(",").map(s => s.trim());
+    const [month, day] = parseMonthDayStr(monthDayStr);
+    const year = parseInt(yearStr, 10);
+    return [month, day, year];
+}
+
+function parseWeekdayMonthDayStr(dateStr) {
+    // Example input: "Wed, Oct 18th"
+    const [_, monthDayStr] = dateStr.split(",").map(s => s.trim());
+    return parseMonthDayStr(monthDayStr);
+}
+
+function extractTimesheetPeriod() {
+    const periodTitleWrapperDiv = document.querySelector('[class *= "period-picker-component-styles__PeriodWrapper-"]');
+    if (!periodTitleWrapperDiv)
+        throw new Error("Cannot find period title wrapper div");
+
+    const periodTextDiv = periodTitleWrapperDiv.querySelector('[class *= "text-component-styles__Text-"]');
+    if (!periodTextDiv)
+        throw new Error("Cannot find period text div");
+    const periodTextStr = periodTextDiv.innerText;
+
+    const [startDateStr, endDateStr] = periodTextStr.split(" - ").map(s => s.trim());
+    const [startMonth, startDay, startYear] = parseMonthDayYearStr(startDateStr);
+    const [endMonth, endDay, endYear] = parseMonthDayYearStr(endDateStr);
+
+    minTimesheetMonth = startMonth;
+    minTimesheetYear = startYear;
+    maxTimesheetMonth = endMonth;
+    maxTimesheetYear = endYear;
+
+    console.log(`Timesheet period: ${minTimesheetMonth + 1}/${minTimesheetYear} - ${maxTimesheetMonth + 1}/${maxTimesheetYear}`);
 }
 
 //==============================================================
@@ -123,10 +157,15 @@ class RowData {
             throw new Error("Invalid rowIdStr format: " + rowIdStr);
         const rowId = parseInt(rowIdStrMatch[1], 10);
 
-        const dateDiv = row.querySelector('[class *= "employee-attendance-summary-date-component-styles__Date-"]');
-        if (!dateDiv)
+        const rowDateDiv = row.querySelector('[class *= "employee-attendance-summary-date-component-styles__Date-"]');
+        if (!rowDateDiv)
             throw new Error("Date div not found in row: " + rowId);
-        const rowDate = parseMonthDay(dateDiv.innerText);
+        const [rowMonth, rowDay] = parseWeekdayMonthDayStr(rowDateDiv.innerText);
+        let rowYear = minTimesheetYear;
+        if (minTimesheetMonth > maxTimesheetMonth && rowMonth < minTimesheetMonth) {
+            rowYear = maxTimesheetYear;
+        }
+        const rowDate = new Date(rowYear, rowMonth, rowDay);
 
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
         const requiredDuration = requiredDurationDiv ?
@@ -404,8 +443,9 @@ async function autoFillTimesheet() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action == "clear") {
+        console.clear();
+        extractTimesheetPeriod();
         (async () => {
-            console.clear();
             console.log("*** starting clear action");
             await clearTimesheet();
             sendResponse({ status: "completed" });
@@ -415,8 +455,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action == "autofill") {
+        console.clear();
+        extractTimesheetPeriod();
         (async () => {
-            console.clear();
             console.log("*** starting autofill action");
             await autoFillTimesheet();
             sendResponse({ status: "completed" });
