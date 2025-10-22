@@ -1,3 +1,5 @@
+const UI_WAIT_MS = 10;
+
 //==============================================================
 //
 // DATE
@@ -82,7 +84,7 @@ class ClockTime {
 //==============================================================
 
 async function waitForUi() {
-    return new Promise(resolve => setTimeout(resolve, 100));
+    return new Promise(resolve => setTimeout(resolve, UI_WAIT_MS));
 }
 
 //==============================================================
@@ -92,18 +94,26 @@ async function waitForUi() {
 //==============================================================
 
 class RowData {
-    constructor(rowId, rowDate, requiredDuration, actualDuration) {
+    constructor(table, rowId, rowDate, requiredDuration, actualDuration) {
+        this.table = table;
         this.rowId = rowId;
         this.rowDate = rowDate;
         this.requiredDuration = requiredDuration;
         this.actualDuration = actualDuration;
     }
 
+    getRow() {
+        const row = this.table.querySelector(`[data-rbd-draggable-id="table-row-${this.rowId}"]`);
+        if (!row)
+            throw new Error(`Row with id ${this.rowId} not found`);
+        return row;
+    }
+
     toString() {
         return `id=${this.rowId}, date=${this.rowDate.toDateString()}, required=${this.requiredDuration.toString()}, actual=${this.actualDuration.toString()})`;
     }
 
-    static fromRow(row) {
+    static fromRow(table, row) {
         const rowIdStr = row.getAttribute("data-rbd-draggable-id");
         if (!rowIdStr)
             throw new Error("rowIdStr not found in row");
@@ -127,7 +137,7 @@ class RowData {
             ClockTime.fromString(actualDurationDiv.innerText) :
             ClockTime.fromMinutes(0);
 
-        return new RowData(rowId, rowDate, requiredDuration, actualDuration);
+        return new RowData(table, rowId, rowDate, requiredDuration, actualDuration);
     }
 }
 
@@ -189,13 +199,11 @@ function isExpandableRow(row) {
     return true;
 }
 
-async function expandRow(row) {
-    const rowData = RowData.fromRow(row);
+async function expandRow(rowData) {
+    const row = rowData.getRow();
 
-    if (!isExpandableRow(row)) {
-        console.warn(`non expandable row ${rowData}`);
-        return null;
-    }
+    if (!isExpandableRow(row))
+        throw new Error(`row ${row} is not expandable`);
 
     // already expanded?
     let leafRow = row.querySelector('[class *= "row-expansion-component-styles__RowExpansion-"]');
@@ -220,8 +228,7 @@ async function expandRow(row) {
     return leafRow;
 }
 
-async function setRowStartEndTimes(row, startTime, endTime) {
-    const rowData = RowData.fromRow(row);
+async function setRowStartEndTimes(rowData, startTime, endTime) {
     console.log(
         `setting row ${rowData} to`,
         startTime ? startTime.toString() : "null",
@@ -229,19 +236,29 @@ async function setRowStartEndTimes(row, startTime, endTime) {
         endTime ? endTime.toString() : "null"
     );
 
-    let leafRow = await expandRow(row);
+    let leafRow = await expandRow(rowData);
     if (!leafRow)
         return false;
 
-    let clockCells = Array.from(leafRow.querySelectorAll("div.clock-in-and-out-item-clock"));
+    let clockCells = [];
+    const multiInOut = leafRow.querySelectorAll('[class *= "multiple-clock-in-and-out-component-styles__ClockInAndOutItems-"]');
+    if (multiInOut.length != 1) {
+        console.warn(`cannot find multiple clock-in-and-out component in leaf row for row ${rowData}`);
+        return false;
+    }
+    for (const item of multiInOut[0].children) {
+        const itemClockCells = item.querySelectorAll("div.clock-in-and-out-item-clock");
+        clockCells.push(...itemClockCells);
+    }
     if (clockCells.length < 2) {
         console.warn(`cannot find clock cells (${clockCells.length}) in leaf row for row ${rowData}`);
         return false;
     }
-    while (clockCells.length > 2)
+
+    await setClockCell(clockCells.shift(), startTime);
+    await setClockCell(clockCells.shift(), endTime);
+    while (clockCells.length)
         await setClockCell(clockCells.shift(), null);
-    await setClockCell(clockCells[0], startTime);
-    await setClockCell(clockCells[1], endTime);
 
     return true;
 }
@@ -253,25 +270,29 @@ async function setRowStartEndTimes(row, startTime, endTime) {
 //==============================================================
 
 async function processRows(table, rowFunc, seenRowIds) {
-    const rawRows = table.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]')
-    const rows = Array.from(rawRows)
-        .filter(isExpandableRow)
-        .sort((a, b) => RowData.fromRow(a).rowId - RowData.fromRow(b).rowId);
+    let didSomething = false;
 
-    for (const row of rows) {
-        const rowData = RowData.fromRow(row);
+    const rowsDatas = Array
+        .from(table.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]'))
+        .filter(isExpandableRow)
+        .map(row => RowData.fromRow(table, row))
+        .sort((a, b) => a.rowId - b.rowId);
+
+    for (const rowData of rowsDatas) {
         if (seenRowIds.has(rowData.rowId))
             continue;
         seenRowIds.add(rowData.rowId);
+        didSomething = true;
 
-        table.scrollTop = Math.max(row.offsetTop - 100, 0);
+        table.scrollTop = Math.max(rowData.getRow().offsetTop - 100, 0);
         await waitForUi();
 
-        const keepGoing = await rowFunc(row);
+        const keepGoing = await rowFunc(rowData);
         if (!keepGoing)
             return false;
     }
-    return true;
+
+    return didSomething;
 }
 
 async function processTable(rowFunc) {
@@ -304,13 +325,8 @@ async function processTable(rowFunc) {
 //
 //==============================================================
 
-async function clearRow(row) {
-    const rowData = RowData.fromRow(row);
-    if (rowData.requiredDuration == 0)
-        return true;
-    if (rowData.actualDuration == 0)
-        return true;
-    return await setRowStartEndTimes(row, null, null);
+async function clearRow(rowData) {
+    return await setRowStartEndTimes(rowData, null, null);
 }
 
 async function clearTimesheet() {
@@ -327,11 +343,16 @@ let requiredMinutes = [];
 let actualMinutes = [];
 
 function needToAdjust(rowData) {
-    return rowData.rowDate < new Date() && rowData.actualDuration < rowData.requiredDuration;
+    const today = new Date();
+    const todayMidnight = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate(),
+    );
+    return rowData.rowDate < todayMidnight && rowData.actualDuration < rowData.requiredDuration;
 }
 
-async function collectRequiredDuration(row) {
-    const rowData = RowData.fromRow(row);
+async function collectRequiredDuration(rowData) {
     if (needToAdjust(rowData))
         requiredMinutes.push(rowData.requiredDuration.toMinutes());
     return true;
@@ -370,8 +391,7 @@ function randomizeActualDurations(tolerance) {
     }
 }
 
-async function autoFillRow(row) {
-    const rowData = RowData.fromRow(row);
+async function autoFillRow(rowData) {
     if (!needToAdjust(rowData))
         return true;
 
@@ -399,7 +419,7 @@ async function autoFillRow(row) {
     const newActualDuration = ClockTime.fromMinutes(actMins);
     const endTime = startTime.add(newActualDuration);
 
-    return await setRowStartEndTimes(row, startTime, endTime);
+    return await setRowStartEndTimes(rowData, startTime, endTime);
 }
 
 async function autoFillTimesheet() {
