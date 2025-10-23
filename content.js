@@ -6,10 +6,6 @@ const UI_WAIT_MS = 10;
 //
 //==============================================================
 
-let minTimesheetDate = null;
-let maxTimesheetDate = null;
-let today = null;
-
 function parseMonthDayStr(s) {
     // Example input: "Oct 18th" or "Feb 21st"
     const cleaned = s.replace(/(st|nd|rd|th)\s*/, "");
@@ -31,35 +27,6 @@ function parseWeekdayMonthDayStr(dateStr) {
     // Example input: "Wed, Oct 18th"
     const [_, monthDayStr] = dateStr.split(",").map(s => s.trim());
     return parseMonthDayStr(monthDayStr);
-}
-
-function extractTimesheetPeriod() {
-    today = new Date().setHours(0, 0, 0, 0);
-
-    const periodTitleWrapperDiv = document.querySelector('[class *= "period-picker-component-styles__PeriodWrapper-"]');
-    if (!periodTitleWrapperDiv)
-        throw new Error("Cannot find period title wrapper div");
-
-    const periodTextDiv = periodTitleWrapperDiv.querySelector('[class *= "text-component-styles__Text-"]');
-    if (!periodTextDiv)
-        throw new Error("Cannot find period text div");
-    const periodTextStr = periodTextDiv.innerText;
-
-    const [startDateStr, endDateStr] = periodTextStr.split(" - ").map(s => s.trim());
-    minTimesheetDate = parseMonthDayYearStr(startDateStr);
-    maxTimesheetDate = parseMonthDayYearStr(endDateStr);
-
-    if (minTimesheetDate > maxTimesheetDate)
-        throw new Error(`Invalid timesheet period: ${periodTextStr}`);
-    if (maxTimesheetDate.getFullYear() - minTimesheetDate.getFullYear() > 1)
-        throw new Error(`Invalid timesheet period (too long): ${periodTextStr}`);
-
-    console.log(
-        "Timesheet period:",
-        minTimesheetDate.toDateString(),
-        "-",
-        maxTimesheetDate.toDateString()
-    );
 }
 
 //==============================================================
@@ -120,17 +87,7 @@ class ClockTime {
 
 //==============================================================
 //
-// UI AUX.
-//
-//==============================================================
-
-async function waitForUi() {
-    return new Promise(resolve => setTimeout(resolve, UI_WAIT_MS));
-}
-
-//==============================================================
-//
-// ONE ROW LOGIC
+// LOGICAL ROW
 //
 //==============================================================
 
@@ -154,7 +111,7 @@ class RowData {
         return `id=${this.rowId}, date=${this.rowDate.toDateString()}, required=${this.requiredDuration.toString()}, actual=${this.actualDuration.toString()})`;
     }
 
-    static fromRow(table, row) {
+    static fromRow(timesheet, row) {
         const rowIdStr = row.getAttribute("data-rbd-draggable-id");
         if (!rowIdStr)
             throw new Error("rowIdStr not found in row");
@@ -168,11 +125,14 @@ class RowData {
             throw new Error("Date div not found in row: " + rowId);
         const [rowMonth, rowDay] = parseWeekdayMonthDayStr(rowDateDiv.innerText);
 
-        let rowDate = new Date(minTimesheetDate.getFullYear(), rowMonth, rowDay);
-        if (rowDate < minTimesheetDate)
-            rowDate = new Date(maxTimesheetDate.getFullYear(), rowMonth, rowDay);
-        if (rowDate < minTimesheetDate || rowDate > maxTimesheetDate)
-            throw new Error(`Row date ${rowDate.toDateString()} out of timesheet range ${minTimesheetDate.toDateString()} - ${maxTimesheetDate.toDateString()}`);
+        const minDate = timesheet.minDate;;
+        const maxDate = timesheet.maxDate;
+
+        let rowDate = new Date(minDate.getFullYear(), rowMonth, rowDay);
+        if (rowDate < minDate)
+            rowDate = new Date(maxDate.getFullYear(), rowMonth, rowDay);
+        if (rowDate < minDate || rowDate > maxDate)
+            throw new Error(`Row date ${rowDate.toDateString()} out of timesheet range ${minDate.toDateString()} - ${maxDate.toDateString()}`);
 
         const requiredDurationDiv = row.querySelector('[class *= "required-duration-component-styles__Timer-"]');
         const requiredDuration = requiredDurationDiv ?
@@ -184,8 +144,70 @@ class RowData {
             ClockTime.fromString(actualDurationDiv.innerText) :
             ClockTime.fromMinutes(0);
 
-        return new RowData(table, rowId, rowDate, requiredDuration, actualDuration);
+        return new RowData(
+            timesheet.table,
+            rowId,
+            rowDate,
+            requiredDuration,
+            actualDuration
+        );
     }
+}
+
+//==============================================================
+//
+// TIMESHEET
+//
+//==============================================================
+
+class Timesheet {
+    constructor() {
+        const today = new Date().setHours(0, 0, 0, 0);
+
+        const periodTitleWrapperDiv = document.querySelector('[class *= "period-picker-component-styles__PeriodWrapper-"]');
+        if (!periodTitleWrapperDiv)
+            throw new Error("Cannot find period title wrapper div");
+
+        const periodTextDiv = periodTitleWrapperDiv.querySelector('[class *= "text-component-styles__Text-"]');
+        if (!periodTextDiv)
+            throw new Error("Cannot find period text div");
+        const periodTextStr = periodTextDiv.innerText;
+
+        const [startDateStr, endDateStr] = periodTextStr.split(" - ").map(s => s.trim());
+        const minDate = parseMonthDayYearStr(startDateStr);
+        const maxDate = parseMonthDayYearStr(endDateStr);
+
+        if (minDate > maxDate)
+            throw new Error(`Invalid timesheet period: ${periodTextStr}`);
+        if (maxDate.getFullYear() - minDate.getFullYear() > 1)
+            throw new Error(`Invalid timesheet period (too long): ${periodTextStr}`);
+
+        const table = document.querySelector('[class *= "table-component-styles__List-"]');
+        if (!table)
+            throw new Error("Cannot find timesheet table");
+
+        this.today = today;
+        this.minDate = minDate;
+        this.maxDate = maxDate;
+        this.table = table;
+
+        console.log(
+            "Timesheet period:",
+            minDate.toDateString(),
+            "-",
+            maxDate.toDateString()
+        );
+    }
+}
+
+//==============================================================
+//
+// UI AUX.
+//
+//==============================================================
+
+async function waitForUi() {
+    return new Promise(resolve => setTimeout(resolve, UI_WAIT_MS));
 }
 
 async function setInput(input, valueStr) {
@@ -306,13 +328,14 @@ async function setRowStartEndTimes(rowData, startTime, endTime) {
 //
 //==============================================================
 
-async function processRows(table, rowFunc, seenRowIds) {
+async function processRows(timesheet, rowFunc, seenRowIds) {
+    const table = timesheet.table;
     let didSomething = false;
 
     const rowsDatas = Array
         .from(table.querySelectorAll('[data-rbd-draggable-id ^= "table-row-"]'))
         .filter(isExpandableRow)
-        .map(row => RowData.fromRow(table, row))
+        .map(row => RowData.fromRow(timesheet, row))
         .sort((a, b) => a.rowId - b.rowId);
 
     for (const rowData of rowsDatas) {
@@ -323,24 +346,20 @@ async function processRows(table, rowFunc, seenRowIds) {
 
         table.scrollTop = Math.max(rowData.getRow().offsetTop - 100, 0);
         await waitForUi();
-        await rowFunc(rowData);
+        await rowFunc(timesheet, rowData);
     }
 
     return didSomething;
 }
 
-async function processTable(rowFunc) {
-    const table = document.querySelector('[class *= "table-component-styles__List-"]');
-    if (!table)
-        throw new Error("Cannot find timesheet table");
-
+async function processTable(timesheet, rowFunc) {
     let seenRowIds = new Set();
 
-    table.scrollTop = 0;
+    timesheet.table.scrollTop = 0;
     await waitForUi();
 
     while (true) {
-        const keepGoing = await processRows(table, rowFunc, seenRowIds);
+        const keepGoing = await processRows(timesheet, rowFunc, seenRowIds);
         if (!keepGoing)
             break;
     }
@@ -352,7 +371,7 @@ async function processTable(rowFunc) {
 //
 //==============================================================
 
-async function clearRow(rowData) {
+async function clearRow(timesheet, rowData) {
     await setRowStartEndTimes(rowData, null, null);
 }
 
@@ -360,10 +379,10 @@ async function clearTimesheet() {
     console.clear();
 
     console.log("*** extracting timesheet period");
-    extractTimesheetPeriod();
+    const timesheet = new Timesheet();
 
     console.log("*** starting clear action");
-    await processTable(clearRow);
+    await processTable(timesheet, clearRow);
 
     console.log("*** done");
 }
@@ -374,26 +393,25 @@ async function clearTimesheet() {
 //
 //==============================================================
 
-let requiredMinutes = {};
-let actualMinutes = {};
-
-function needToAdjust(rowData) {
-    return rowData.rowDate < today && rowData.actualDuration < rowData.requiredDuration;
+function needToAdjust(timesheet, rowData) {
+    return rowData.rowDate < timesheet.today && rowData.actualDuration < rowData.requiredDuration;
 }
 
-async function collectRequiredMinutes(rowData) {
-    if (!needToAdjust(rowData))
+async function collectRequiredMinutes(timesheet, rowData) {
+    if (!needToAdjust(timesheet, rowData))
         return;
-    requiredMinutes[rowData.rowId] = rowData.requiredDuration.toMinutes();
+    timesheet.requiredMinutes[rowData.rowId] = rowData.requiredDuration.toMinutes();
 }
 
 function randomInt(min, max) {
     return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function randomizeActualDurations(tolerance) {
+function randomizeActualDurations(timesheet, tolerance) {
 
-    actualMinutes = {};
+    const requiredMinutes = timesheet.requiredMinutes;
+
+    let actualMinutes = {};
     for (const [rowId, required] of Object.entries(requiredMinutes)) {
         actualMinutes[rowId] = randomInt(
             Math.max(0, required - tolerance),
@@ -422,11 +440,16 @@ function randomizeActualDurations(tolerance) {
         actualMinutes[randomRowId] += adjustment;
         diff += adjustment;
     }
+
+    timesheet.actualMinutes = actualMinutes;
 }
 
-async function autoFillRow(rowData) {
-    if (!needToAdjust(rowData))
+async function autoFillRow(timesheet, rowData) {
+    if (!needToAdjust(timesheet, rowData))
         return;
+
+    const requiredMinutes = timesheet.requiredMinutes;
+    const actualMinutes = timesheet.actualMinutes;
 
     if (!(rowData.rowId in requiredMinutes))
         throw new Error(`no required minutes found for row ${rowData}`);
@@ -458,14 +481,16 @@ async function autoFillTimesheet() {
     console.clear();
 
     console.log("*** extracting timesheet period");
-    extractTimesheetPeriod();
+    const timesheet = new Timesheet();
 
     console.log("*** scanning table");
-    requiredMinutes = {};
-    await processTable(collectRequiredMinutes);
+    timesheet.requiredMinutes = {};
+    await processTable(timesheet, collectRequiredMinutes);
+
+    randomizeActualDurations(timesheet, 15);
 
     console.log("*** starting autofill action");
-    await processTable(autoFillRow);
+    await processTable(timesheet, autoFillRow);
 
     console.log("*** done");
 }
