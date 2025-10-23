@@ -357,7 +357,15 @@ async function clearRow(rowData) {
 }
 
 async function clearTimesheet() {
+    console.clear();
+
+    console.log("*** extracting timesheet period");
+    extractTimesheetPeriod();
+
+    console.log("*** starting clear action");
     await processTable(clearRow);
+
+    console.log("*** done");
 }
 
 //==============================================================
@@ -366,17 +374,17 @@ async function clearTimesheet() {
 //
 //==============================================================
 
-let requiredMinutes = [];
-let actualMinutes = [];
+let requiredMinutes = {};
+let actualMinutes = {};
 
 function needToAdjust(rowData) {
     return rowData.rowDate < today && rowData.actualDuration < rowData.requiredDuration;
 }
 
-async function collectRequiredDuration(rowData) {
+async function collectRequiredMinutes(rowData) {
     if (!needToAdjust(rowData))
         return;
-    requiredMinutes.push(rowData.requiredDuration.toMinutes());
+    requiredMinutes[rowData.rowId] = rowData.requiredDuration.toMinutes();
 }
 
 function randomInt(min, max) {
@@ -385,19 +393,23 @@ function randomInt(min, max) {
 
 function randomizeActualDurations(tolerance) {
 
-    actualMinutes = requiredMinutes.map(required => randomInt(
-        Math.max(0, required - tolerance),
-        required + tolerance
-    ));
+    actualMinutes = {};
+    for (const [rowId, required] of Object.entries(requiredMinutes)) {
+        actualMinutes[rowId] = randomInt(
+            Math.max(0, required - tolerance),
+            required + tolerance
+        );
+    }
 
-    const sumRequired = requiredMinutes.reduce((a, b) => a + b, 0);
-    const sumActuals = actualMinutes.reduce((a, b) => a + b, 0);
+    const sumRequired = Object.values(requiredMinutes).reduce((a, b) => a + b, 0);
+    const sumActuals = Object.values(actualMinutes).reduce((a, b) => a + b, 0);
 
     let diff = sumActuals - sumRequired;
+    const rowIds = Object.keys(requiredMinutes);
     while (diff !== 0) {
-        const i = randomInt(0, requiredMinutes.length - 1);
-        const base = requiredMinutes[i];
-        const curr = actualMinutes[i];
+        const randomRowId = rowIds[randomInt(0, rowIds.length - 1)];
+        const base = requiredMinutes[randomRowId];
+        const curr = actualMinutes[randomRowId];
 
         let adjustment = 0;
 
@@ -407,7 +419,7 @@ function randomizeActualDurations(tolerance) {
             adjustment = 1;
         }
 
-        actualMinutes[i] += adjustment;
+        actualMinutes[randomRowId] += adjustment;
         diff += adjustment;
     }
 }
@@ -416,12 +428,17 @@ async function autoFillRow(rowData) {
     if (!needToAdjust(rowData))
         return;
 
-    if (requiredMinutes.length === 0)
-        throw new Error(`no required minutes left for row ${rowData}`);
-    if (actualMinutes.length === 0)
-        throw new Error(`no actual minutes left for row ${rowData}`);
-    const reqMins = requiredMinutes.shift();
-    const actMins = actualMinutes.shift();
+    if (!(rowData.rowId in requiredMinutes))
+        throw new Error(`no required minutes found for row ${rowData}`);
+    if (!(rowData.rowId in actualMinutes))
+        throw new Error(`no actual minutes found for row ${rowData}`);
+
+    const reqMins = requiredMinutes[rowData.rowId];
+    const actMins = actualMinutes[rowData.rowId];
+
+    delete requiredMinutes[rowData.rowId];
+    delete actualMinutes[rowData.rowId];
+
     if (reqMins !== rowData.requiredDuration.toMinutes())
         throw new Error(`mismatched required minutes for row ${rowData}`);
 
@@ -438,11 +455,19 @@ async function autoFillRow(rowData) {
 }
 
 async function autoFillTimesheet() {
-    requiredMinutes = [];
-    await processTable(collectRequiredDuration);
-    randomizeActualDurations(15);
-    console.log("REQUIRED MINUTES:", requiredMinutes);
+    console.clear();
+
+    console.log("*** extracting timesheet period");
+    extractTimesheetPeriod();
+
+    console.log("*** scanning table");
+    requiredMinutes = {};
+    await processTable(collectRequiredMinutes);
+
+    console.log("*** starting autofill action");
     await processTable(autoFillRow);
+
+    console.log("*** done");
 }
 
 //==============================================================
@@ -453,25 +478,17 @@ async function autoFillTimesheet() {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action == "clear") {
-        console.clear();
-        extractTimesheetPeriod();
         (async () => {
-            console.log("*** starting clear action");
             await clearTimesheet();
             sendResponse({ status: "completed" });
-            console.log("*** completed clear action");
         })();
         return true; // Keep the message channel open for async response
     }
 
     if (request.action == "autofill") {
-        console.clear();
-        extractTimesheetPeriod();
         (async () => {
-            console.log("*** starting autofill action");
             await autoFillTimesheet();
             sendResponse({ status: "completed" });
-            console.log("*** completed autofill action");
         })();
         return true; // Keep the message channel open for async response
     }
