@@ -8,23 +8,7 @@ const UI_WAIT_MS = 10;
 
 let minTimesheetDate = null;
 let maxTimesheetDate = null;
-
-class MonthDay {
-    constructor(month, day) {
-        this.month = month;
-        this.day = day;
-    }
-
-    toString() {
-        const monthStr = (this.month + 1).toString().padStart(2, "0");
-        const dayStr = this.day.toString().padStart(2, "0");
-        return `${monthStr}${dayStr}`;
-    }
-
-    valueOf() {
-        return this.toString();
-    }
-}
+let today = null;
 
 function parseMonthDayStr(s) {
     // Example input: "Oct 18th" or "Feb 21st"
@@ -32,15 +16,15 @@ function parseMonthDayStr(s) {
     const [monthStr, dayStr] = cleaned.split(" ").map(s => s.trim());
     const month = new Date(`${monthStr} 1, 2000`).getMonth(); // extract month index (0-11)
     const day = parseInt(dayStr, 10);
-    return new MonthDay(month, day);
+    return [month, day];
 }
 
 function parseMonthDayYearStr(dateStr) {
     // Example input: "Oct 18th, 2024"
     const [monthDayStr, yearStr] = dateStr.split(",").map(s => s.trim());
-    const monthDay = parseMonthDayStr(monthDayStr);
+    const [month, day] = parseMonthDayStr(monthDayStr);
     const year = parseInt(yearStr, 10);
-    return new Date(year, monthDay.month, monthDay.day);
+    return new Date(year, month, day);
 }
 
 function parseWeekdayMonthDayStr(dateStr) {
@@ -50,6 +34,8 @@ function parseWeekdayMonthDayStr(dateStr) {
 }
 
 function extractTimesheetPeriod() {
+    today = new Date().setHours(0, 0, 0, 0);
+
     const periodTitleWrapperDiv = document.querySelector('[class *= "period-picker-component-styles__PeriodWrapper-"]');
     if (!periodTitleWrapperDiv)
         throw new Error("Cannot find period title wrapper div");
@@ -180,20 +166,11 @@ class RowData {
         const rowDateDiv = row.querySelector('[class *= "employee-attendance-summary-date-component-styles__Date-"]');
         if (!rowDateDiv)
             throw new Error("Date div not found in row: " + rowId);
-        const rowMonthDay = parseWeekdayMonthDayStr(rowDateDiv.innerText);
+        const [rowMonth, rowDay] = parseWeekdayMonthDayStr(rowDateDiv.innerText);
 
-        let rowDate = new Date(
-            minTimesheetDate.getFullYear(),
-            rowMonthDay.month,
-            rowMonthDay.day
-        );
-        if (rowDate < minTimesheetDate) {
-            rowDate = new Date(
-                maxTimesheetDate.getFullYear(),
-                rowMonthDay.month,
-                rowMonthDay.day
-            );
-        }
+        let rowDate = new Date(minTimesheetDate.getFullYear(), rowMonth, rowDay);
+        if (rowDate < minTimesheetDate)
+            rowDate = new Date(maxTimesheetDate.getFullYear(), rowMonth, rowDay);
         if (rowDate < minTimesheetDate || rowDate > maxTimesheetDate)
             throw new Error(`Row date ${rowDate.toDateString()} out of timesheet range ${minTimesheetDate.toDateString()} - ${maxTimesheetDate.toDateString()}`);
 
@@ -302,9 +279,17 @@ async function setRowStartEndTimes(rowData, startTime, endTime) {
     const multiInOut = leafRow.querySelectorAll('[class *= "multiple-clock-in-and-out-component-styles__ClockInAndOutItems-"]');
     if (multiInOut.length != 1)
         throw new Error(`cannot find multiple clock-in-and-out component in leaf row for row ${rowData}`);
-    for (const item of multiInOut[0].children) {
-        const itemClockCells = item.querySelectorAll("div.clock-in-and-out-item-clock");
-        clockCells.push(...itemClockCells);
+    for (const inOutComponent of multiInOut[0].children) {
+        const inAndOut = inOutComponent.querySelectorAll('[class *= "clock-in-and-out-component-styles__ClockInAndOut-"]');
+        if (inAndOut.length != 1)
+            throw new Error(`cannot find clock-in-and-out component in leaf row for row ${rowData}`);
+        for (const obj of inAndOut[0].children) {
+            if (obj.tagName !== "DIV")
+                continue;
+            if (!obj.getAttribute("class")?.includes("editable-component-styles__Editable-"))
+                continue;
+            clockCells.push(obj);
+        }
     }
     if (clockCells.length < 2)
         throw new Error(`cannot find clock cells (${clockCells.length}) in leaf row for row ${rowData}`);
@@ -385,13 +370,7 @@ let requiredMinutes = [];
 let actualMinutes = [];
 
 function needToAdjust(rowData) {
-    const today = new Date();
-    const todayMidnight = new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate(),
-    );
-    return rowData.rowDate < todayMidnight && rowData.actualDuration < rowData.requiredDuration;
+    return rowData.rowDate < today && rowData.actualDuration < rowData.requiredDuration;
 }
 
 async function collectRequiredDuration(rowData) {
@@ -462,6 +441,7 @@ async function autoFillTimesheet() {
     requiredMinutes = [];
     await processTable(collectRequiredDuration);
     randomizeActualDurations(15);
+    console.log("REQUIRED MINUTES:", requiredMinutes);
     await processTable(autoFillRow);
 }
 
