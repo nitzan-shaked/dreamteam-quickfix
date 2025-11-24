@@ -32,6 +32,24 @@
   </style>
 </head>
 <body>
+  <form id="config-form" style="margin-bottom: 12px;">
+
+    <label style="display:flex; align-items:center; margin-bottom:4px; font-size:13px; gap:8px; width:100%;">
+      <span>Start time</span>
+      <input type="time" id="nominalStartTime" style="flex:1; margin-top:2px; margin-bottom:8px;" required>
+    </label>
+
+    <label style="display:flex; align-items:center; margin-bottom:4px; font-size:13px; gap:8px; width:100%;">
+      <span style="white-space:nowrap;">Fuzz start</span>
+      <input type="number" id="fuzzStartTime" min="0" value="15" style="flex:0 0 38px; max-width:38px; margin-left:auto;">
+    </label>
+
+    <label style="display:flex; align-items:center; margin-bottom:8px; font-size:13px; gap:8px; width:100%;">
+      <span style="white-space:nowrap;">Fuzz duration</span>
+      <input type="number" id="fuzzDuration" min="0" value="15" style="flex:0 0 38px; max-width:38px; margin-left:auto;">
+    </label>
+
+  </form>
   <button id="autofill">Autofill</button>
   <button id="clear">Clear</button>
   <script src="popup.js"></script>

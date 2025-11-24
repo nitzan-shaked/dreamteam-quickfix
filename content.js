@@ -472,8 +472,21 @@ async function autoFillRow(timesheet, rowData) {
     if (reqMins !== rowData.requiredDuration.toMinutes())
         throw new Error(`mismatched required minutes for row ${rowData}`);
 
-    const nominalStartTime = new ClockTime(8, 0);
-    const deltaStartTimeMinutes = randomInt(-15, 15);
+    const config = timesheet._userConfig || {
+        nominalStartTime: "08:00",
+        fuzzStartTime: 0,
+        fuzzDuration: 0
+    };
+    let [h, m] = config.nominalStartTime.split(":").map(Number);
+    if (isNaN(h) || isNaN(m)) {
+        h = 8;
+        m = 0;
+    }
+    const nominalStartTime = new ClockTime(h, m);
+    let deltaStartTimeMinutes = 0;
+    if (config.fuzzStartTime > 0) {
+        deltaStartTimeMinutes = randomInt(-config.fuzzStartTime, config.fuzzStartTime);
+    }
     const startTime = ClockTime.fromMinutes(
         nominalStartTime.toMinutes() + deltaStartTimeMinutes
     );
@@ -484,17 +497,37 @@ async function autoFillRow(timesheet, rowData) {
     await setRowStartEndTimes(rowData, startTime, endTime);
 }
 
+async function getConfig() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get([
+            "nominalStartTime",
+            "fuzzStartTime",
+            "fuzzDuration"
+        ], (result) => {
+            resolve({
+                nominalStartTime: result.nominalStartTime || "08:00",
+                fuzzStartTime: typeof result.fuzzStartTime === "number" && result.fuzzStartTime >= 0 ? result.fuzzStartTime : 0,
+                fuzzDuration: typeof result.fuzzDuration === "number" && result.fuzzDuration >= 0 ? result.fuzzDuration : 0
+            });
+        });
+    });
+}
+
 async function autoFillTimesheet() {
     console.clear();
 
     console.log("*** extracting timesheet period");
     const timesheet = new Timesheet();
 
+    const config = await getConfig();
+    timesheet._userConfig = config; // pass config for use in autofillRow
+    console.log("*** config", config);
+
     console.log("*** scanning table");
     timesheet.requiredMinutes = {};
     await processTable(timesheet, collectRequiredMinutes);
 
-    randomizeActualDurations(timesheet, 15);
+    randomizeActualDurations(timesheet, config.fuzzDuration > 0 ? config.fuzzDuration : 0);
 
     console.log("*** starting autofill action");
     await processTable(timesheet, autoFillRow);
