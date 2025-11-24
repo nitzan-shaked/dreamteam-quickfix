@@ -140,9 +140,16 @@ class RowData {
             ClockTime.fromMinutes(0);
 
         const actualDurationDiv = row.querySelector('[class *= "timer-difference-presentation-component-styles__Duration-"]');
-        const actualDuration = actualDurationDiv ?
-            ClockTime.fromString(actualDurationDiv.innerText) :
-            ClockTime.fromMinutes(0);
+        const actualDurationStr = actualDurationDiv ? actualDurationDiv.innerText : "";
+
+        function isEmptyDurationStr(s) {
+            s = s.trim();
+            return s === "" || s === "-";
+        }
+
+        const actualDuration = isEmptyDurationStr(actualDurationStr) ?
+            ClockTime.fromMinutes(0) :
+            ClockTime.fromString(actualDurationStr);
 
         return new RowData(
             timesheet.table,
