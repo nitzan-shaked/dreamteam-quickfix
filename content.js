@@ -414,26 +414,31 @@ function randomInt(min, max) {
     return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function randomizeActualDurations(timesheet, tolerance) {
-
+function randomizeActualDurations(timesheet, tolerance, ftePercent) {
     const requiredMinutes = timesheet.requiredMinutes;
+    const scale = (typeof ftePercent === "number" && ftePercent > 0) ? (ftePercent / 100) : 1;
+
+    let scaledRequired = {};
+    for (const [rowId, required] of Object.entries(requiredMinutes)) {
+        scaledRequired[rowId] = Math.round(required * scale);
+    }
 
     let actualMinutes = {};
-    for (const [rowId, required] of Object.entries(requiredMinutes)) {
+    for (const [rowId, required] of Object.entries(scaledRequired)) {
         actualMinutes[rowId] = randomInt(
             Math.max(0, required - tolerance),
             required + tolerance
         );
     }
 
-    const sumRequired = Object.values(requiredMinutes).reduce((a, b) => a + b, 0);
+    const sumRequired = Object.values(scaledRequired).reduce((a, b) => a + b, 0);
     const sumActuals = Object.values(actualMinutes).reduce((a, b) => a + b, 0);
 
     let diff = sumActuals - sumRequired;
-    const rowIds = Object.keys(requiredMinutes);
+    const rowIds = Object.keys(scaledRequired);
     while (diff !== 0) {
         const randomRowId = rowIds[randomInt(0, rowIds.length - 1)];
-        const base = requiredMinutes[randomRowId];
+        const base = scaledRequired[randomRowId];
         const curr = actualMinutes[randomRowId];
 
         let adjustment = 0;
@@ -502,12 +507,14 @@ async function getConfig() {
         chrome.storage.local.get([
             "nominalStartTime",
             "fuzzStartTime",
-            "fuzzDuration"
+            "fuzzDuration",
+            "ftePercent"
         ], (result) => {
             resolve({
                 nominalStartTime: result.nominalStartTime || "08:00",
                 fuzzStartTime: typeof result.fuzzStartTime === "number" && result.fuzzStartTime >= 0 ? result.fuzzStartTime : 0,
-                fuzzDuration: typeof result.fuzzDuration === "number" && result.fuzzDuration >= 0 ? result.fuzzDuration : 0
+                fuzzDuration: typeof result.fuzzDuration === "number" && result.fuzzDuration >= 0 ? result.fuzzDuration : 0,
+                ftePercent: typeof result.ftePercent === "number" && result.ftePercent > 0 ? result.ftePercent : 100
             });
         });
     });
@@ -527,7 +534,7 @@ async function autoFillTimesheet() {
     timesheet.requiredMinutes = {};
     await processTable(timesheet, collectRequiredMinutes);
 
-    randomizeActualDurations(timesheet, config.fuzzDuration > 0 ? config.fuzzDuration : 0);
+    randomizeActualDurations(timesheet, config.fuzzDuration > 0 ? config.fuzzDuration : 0, config.ftePercent);
 
     console.log("*** starting autofill action");
     await processTable(timesheet, autoFillRow);
