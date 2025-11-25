@@ -168,7 +168,7 @@ class RowData {
 //==============================================================
 
 class Timesheet {
-    constructor() {
+    constructor(config) {
         const today = new Date().setHours(0, 0, 0, 0);
 
         const periodTitleWrapperDiv = document.querySelector('[class *= "period-picker-component-styles__PeriodWrapper-"]');
@@ -193,6 +193,7 @@ class Timesheet {
         if (!table)
             throw new Error("Cannot find timesheet table");
 
+        this.config = config;
         this.today = today;
         this.minDate = minDate;
         this.maxDate = maxDate;
@@ -414,7 +415,11 @@ function randomInt(min, max) {
     return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function randomizeActualDurations(timesheet, tolerance, ftePercent) {
+function randomizeActualDurations(timesheet) {
+    const config = timesheet.config;
+    const tolerance = config.fuzzDuration;
+    const ftePercent = config.ftePercent;
+
     const requiredMinutes = timesheet.requiredMinutes;
     const scale = (typeof ftePercent === "number" && ftePercent > 0) ? (ftePercent / 100) : 1;
 
@@ -477,21 +482,12 @@ async function autoFillRow(timesheet, rowData) {
     if (reqMins !== rowData.requiredDuration.toMinutes())
         throw new Error(`mismatched required minutes for row ${rowData}`);
 
-    const config = timesheet._userConfig || {
-        nominalStartTime: "08:00",
-        fuzzStartTime: 0,
-        fuzzDuration: 0
-    };
-    let [h, m] = config.nominalStartTime.split(":").map(Number);
-    if (isNaN(h) || isNaN(m)) {
-        h = 8;
-        m = 0;
-    }
+    const config = timesheet.config;
+    const [h, m] = config.nominalStartTime.split(":").map(Number);
     const nominalStartTime = new ClockTime(h, m);
-    let deltaStartTimeMinutes = 0;
-    if (config.fuzzStartTime > 0) {
-        deltaStartTimeMinutes = randomInt(-config.fuzzStartTime, config.fuzzStartTime);
-    }
+    const deltaStartTimeMinutes = config.fuzzStartTime > 0 ?
+        randomInt(-config.fuzzStartTime, config.fuzzStartTime)
+        : 0;
     const startTime = ClockTime.fromMinutes(
         nominalStartTime.toMinutes() + deltaStartTimeMinutes
     );
@@ -502,39 +498,27 @@ async function autoFillRow(timesheet, rowData) {
     await setRowStartEndTimes(rowData, startTime, endTime);
 }
 
-async function getConfig() {
+function getConfig() {
     return new Promise((resolve) => {
-        chrome.storage.local.get([
-            "nominalStartTime",
-            "fuzzStartTime",
-            "fuzzDuration",
-            "ftePercent"
-        ], (result) => {
-            resolve({
-                nominalStartTime: result.nominalStartTime || "08:00",
-                fuzzStartTime: typeof result.fuzzStartTime === "number" && result.fuzzStartTime >= 0 ? result.fuzzStartTime : 0,
-                fuzzDuration: typeof result.fuzzDuration === "number" && result.fuzzDuration >= 0 ? result.fuzzDuration : 0,
-                ftePercent: typeof result.ftePercent === "number" && result.ftePercent > 0 ? result.ftePercent : 100
-            });
-        });
+        load_dreamteam_quickfix_config(resolve);
     });
 }
 
 async function autoFillTimesheet() {
     console.clear();
 
-    console.log("*** extracting timesheet period");
-    const timesheet = new Timesheet();
-
+    console.log("*** loading config");
     const config = await getConfig();
-    timesheet._userConfig = config; // pass config for use in autofillRow
-    console.log("*** config", config);
+    console.log(config);
+
+    console.log("*** extracting timesheet period");
+    const timesheet = new Timesheet(config);
 
     console.log("*** scanning table");
     timesheet.requiredMinutes = {};
     await processTable(timesheet, collectRequiredMinutes);
 
-    randomizeActualDurations(timesheet, config.fuzzDuration > 0 ? config.fuzzDuration : 0, config.ftePercent);
+    randomizeActualDurations(timesheet)
 
     console.log("*** starting autofill action");
     await processTable(timesheet, autoFillRow);
